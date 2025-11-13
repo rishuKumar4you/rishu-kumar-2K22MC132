@@ -1,28 +1,507 @@
-1) Create users:
-curl -X POST "http://127.0.0.1:8000/users?name=Alice&email=alice@x"
-curl -X POST "http://127.0.0.1:8000/users?name=Bob&email=bob@x"
+=================================================================
+BOOSTLY API TEST CASES - Comprehensive Testing Guide
+=================================================================
 
-2) Alice recognizes Bob with 20 credits:
-curl -X POST "http://127.0.0.1:8000/recognize?receiver_id=2&credits=20&note=Thanks" -H "x-api-user: 1"
+BASE_URL: http://127.0.0.1:8000
 
-Expected: success, Bob.redeemable_balance increased by 20, Alice.grant_balance decreased by 20 and sent_this_month increased by 20.
+=================================================================
+SECTION 1: USER CREATION
+=================================================================
 
-3) Endorse recognition 1:
-curl -X POST "http://127.0.0.1:8000/recognitions/1/endorse" -H "x-api-user: 3"
+1.1) Create valid users:
+---
+curl -X POST "http://127.0.0.1:8000/users" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Alice Smith", "email": "alice@example.com"}'
 
-Expected: success on first endorsement, 400 on second attempt by same user.
+curl -X POST "http://127.0.0.1:8000/users" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Bob Johnson", "email": "bob@example.com"}'
 
-4) Redeem:
-curl -X POST "http://127.0.0.1:8000/redeem?credits=10" -H "x-api-user: 2"
+curl -X POST "http://127.0.0.1:8000/users" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Charlie Brown", "email": "charlie@example.com"}'
 
-Expected: voucher_inr = 50, Bob.redeemable_balance decreased.
+Expected: 200 OK, user objects with id, grant_balance=100, sent_this_month=0
 
-5) Admin reset (carry-forward):
-curl -X POST "http://127.0.0.1:8000/admin/reset_month" -H "x-api-user: 1"
 
-Expected: grant_balance reset to 100+carry (carry up to 50), sent_this_month = 0.
+1.2) Test invalid email (validation error):
+---
+curl -X POST "http://127.0.0.1:8000/users" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Invalid User", "email": "not-an-email"}'
 
-6) Leaderboard:
+Expected: 422 Unprocessable Entity - email validation error
+
+
+1.3) Test empty name (validation error):
+---
+curl -X POST "http://127.0.0.1:8000/users" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "   ", "email": "test@example.com"}'
+
+Expected: 422 Unprocessable Entity - name cannot be empty
+
+
+1.4) Test duplicate email:
+---
+curl -X POST "http://127.0.0.1:8000/users" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Duplicate", "email": "alice@example.com"}'
+
+Expected: 400 Bad Request - "Email already registered"
+
+
+1.5) Test name too long:
+---
+curl -X POST "http://127.0.0.1:8000/users" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "email": "toolong@example.com"}'
+
+Expected: 422 Unprocessable Entity - name max length 100
+
+
+=================================================================
+SECTION 2: RECOGNITION (PEER-TO-PEER CREDITS)
+=================================================================
+
+2.1) Alice recognizes Bob with 20 credits:
+---
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 1" \
+  -d '{"receiver_id": 2, "credits": 20, "note": "Great work on the project!"}'
+
+Expected: 200 OK
+- Response: {"status": "ok", "recognition_id": 1}
+- Alice: grant_balance=80, sent_this_month=20
+- Bob: redeemable_balance=20, total_received=20
+
+
+2.2) Bob recognizes Charlie with 15 credits:
+---
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 2" \
+  -d '{"receiver_id": 3, "credits": 15, "note": "Thanks for helping with debugging"}'
+
+Expected: 200 OK - recognition_id: 2
+
+
+2.3) Test self-recognition (should fail):
+---
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 1" \
+  -d '{"receiver_id": 1, "credits": 10, "note": "Testing self"}'
+
+Expected: 400 Bad Request - "Cannot send credits to yourself"
+
+
+2.4) Test zero credits (validation error):
+---
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 1" \
+  -d '{"receiver_id": 2, "credits": 0}'
+
+Expected: 422 Unprocessable Entity - credits must be > 0
+
+
+2.5) Test credits > 100 (validation error):
+---
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 1" \
+  -d '{"receiver_id": 2, "credits": 101}'
+
+Expected: 422 Unprocessable Entity - credits must be <= 100
+
+
+2.6) Test negative receiver_id (validation error):
+---
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 1" \
+  -d '{"receiver_id": 0, "credits": 10}'
+
+Expected: 422 Unprocessable Entity - receiver_id must be > 0
+
+
+2.7) Test insufficient balance:
+---
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 1" \
+  -d '{"receiver_id": 2, "credits": 90}'
+
+Expected: 400 Bad Request - "Insufficient grant balance to send"
+(Alice only has 80 left after step 2.1)
+
+
+2.8) Test monthly limit (send 100 credits total):
+---
+# Alice sends 80 more credits (already sent 20)
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 1" \
+  -d '{"receiver_id": 3, "credits": 80}'
+
+# Try to send 1 more (should fail - exceeds 100/month)
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 1" \
+  -d '{"receiver_id": 2, "credits": 1}'
+
+Expected: 400 Bad Request - "Monthly sending limit exceeded"
+
+
+2.9) Test non-existent receiver:
+---
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 2" \
+  -d '{"receiver_id": 999, "credits": 10}'
+
+Expected: 404 Not Found - "Receiver not found"
+
+
+2.10) Test note too long (validation error):
+---
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 2" \
+  -d '{"receiver_id": 3, "credits": 5, "note": "'$(printf 'a%.0s' {1..501})'"}'
+
+Expected: 422 Unprocessable Entity - note max length 500
+
+
+=================================================================
+SECTION 3: ENDORSEMENTS
+=================================================================
+
+3.1) Charlie endorses recognition 1:
+---
+curl -X POST "http://127.0.0.1:8000/recognitions/1/endorse" \
+  -H "x-api-user: 3"
+
+Expected: 200 OK - {"status": "ok"}
+
+
+3.2) Test duplicate endorsement (should fail):
+---
+curl -X POST "http://127.0.0.1:8000/recognitions/1/endorse" \
+  -H "x-api-user: 3"
+
+Expected: 400 Bad Request - "Already endorsed"
+
+
+3.3) Test invalid recognition ID:
+---
+curl -X POST "http://127.0.0.1:8000/recognitions/999/endorse" \
+  -H "x-api-user: 2"
+
+Expected: 404 Not Found - "Recognition not found"
+
+
+3.4) Test zero/negative recognition ID:
+---
+curl -X POST "http://127.0.0.1:8000/recognitions/0/endorse" \
+  -H "x-api-user: 2"
+
+Expected: 400 Bad Request - "Invalid recognition ID"
+
+
+=================================================================
+SECTION 4: REDEMPTION
+=================================================================
+
+4.1) Bob redeems 10 credits:
+---
+curl -X POST "http://127.0.0.1:8000/redeem" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 2" \
+  -d '{"credits": 10}'
+
+Expected: 200 OK
+- Response: {"status": "ok", "voucher_inr": 50}
+- Bob's redeemable_balance reduced by 10 (20 -> 10)
+
+
+4.2) Charlie redeems all credits:
+---
+curl -X POST "http://127.0.0.1:8000/redeem" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 3" \
+  -d '{"credits": 95}'
+
+Expected: 200 OK - voucher_inr: 475 (95 * 5)
+
+
+4.3) Test insufficient redeemable balance:
+---
+curl -X POST "http://127.0.0.1:8000/redeem" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 2" \
+  -d '{"credits": 50}'
+
+Expected: 400 Bad Request - "Insufficient redeemable balance"
+(Bob only has 10 credits left)
+
+
+4.4) Test zero credits (validation error):
+---
+curl -X POST "http://127.0.0.1:8000/redeem" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 2" \
+  -d '{"credits": 0}'
+
+Expected: 422 Unprocessable Entity - credits must be > 0
+
+
+4.5) Test credits > 10000 (validation error):
+---
+curl -X POST "http://127.0.0.1:8000/redeem" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 2" \
+  -d '{"credits": 10001}'
+
+Expected: 422 Unprocessable Entity - credits must be <= 10000
+
+
+=================================================================
+SECTION 5: LEADERBOARD
+=================================================================
+
+5.1) Get top 5 users:
+---
 curl -X GET "http://127.0.0.1:8000/leaderboard?limit=5"
 
-Expected: JSON list of top students with total_received, recognition_count, endorsement_total.
+Expected: 200 OK - JSON array with users sorted by total_received (desc)
+[
+  {
+    "id": 3,
+    "name": "Charlie Brown",
+    "total_received": 95,
+    "recognition_count": 2,
+    "endorsement_total": 0
+  },
+  {
+    "id": 2,
+    "name": "Bob Johnson",
+    "total_received": 20,
+    "recognition_count": 1,
+    "endorsement_total": 1
+  },
+  ...
+]
+
+
+5.2) Get top 2 users:
+---
+curl -X GET "http://127.0.0.1:8000/leaderboard?limit=2"
+
+Expected: 200 OK - only 2 users returned
+
+
+5.3) Test invalid limit (0):
+---
+curl -X GET "http://127.0.0.1:8000/leaderboard?limit=0"
+
+Expected: 422 Unprocessable Entity - limit must be > 0
+
+
+5.4) Test limit > 100:
+---
+curl -X GET "http://127.0.0.1:8000/leaderboard?limit=101"
+
+Expected: 422 Unprocessable Entity - limit must be <= 100
+
+
+=================================================================
+SECTION 6: ADMIN - MONTH RESET
+=================================================================
+
+6.1) Reset month (admin only):
+---
+curl -X POST "http://127.0.0.1:8000/admin/reset_month" \
+  -H "x-api-user: 1"
+
+Expected: 200 OK
+- Response: {"status": "ok", "users_reset": 3}
+- All users: grant_balance reset to 100 + carry_forward (max 50)
+- All users: sent_this_month reset to 0
+- Example: Alice had 0 balance, gets 100. Bob had some, gets 100+carry
+
+
+6.2) Test non-admin access:
+---
+curl -X POST "http://127.0.0.1:8000/admin/reset_month" \
+  -H "x-api-user: 2"
+
+Expected: 403 Forbidden - "forbidden"
+
+
+6.3) Reset month again (should skip already reset users):
+---
+curl -X POST "http://127.0.0.1:8000/admin/reset_month" \
+  -H "x-api-user: 1"
+
+Expected: 200 OK - users_reset: 0 (already reset this month)
+
+
+=================================================================
+SECTION 7: AUDIT LOGS (Admin Only)
+=================================================================
+
+7.1) Get all recent audit logs:
+---
+curl -X GET "http://127.0.0.1:8000/admin/audit-logs?limit=20" \
+  -H "x-api-user: 1"
+
+Expected: 200 OK - Array of audit log entries with actions, timestamps, details
+
+
+7.2) Filter by action type (recognize):
+---
+curl -X GET "http://127.0.0.1:8000/admin/audit-logs?action=recognize&limit=50" \
+  -H "x-api-user: 1"
+
+Expected: 200 OK - Only recognition action logs
+
+
+7.3) Filter by action type (redeem):
+---
+curl -X GET "http://127.0.0.1:8000/admin/audit-logs?action=redeem" \
+  -H "x-api-user: 1"
+
+Expected: 200 OK - Only redemption action logs
+
+
+7.4) Filter by user ID:
+---
+curl -X GET "http://127.0.0.1:8000/admin/audit-logs?user_id=1&limit=100" \
+  -H "x-api-user: 1"
+
+Expected: 200 OK - Only actions performed by user 1 (Alice)
+
+
+7.5) Filter by entity type:
+---
+curl -X GET "http://127.0.0.1:8000/admin/audit-logs?entity_type=recognition" \
+  -H "x-api-user: 1"
+
+Expected: 200 OK - Only logs related to recognition entities
+
+
+7.6) Multiple filters combined:
+---
+curl -X GET "http://127.0.0.1:8000/admin/audit-logs?action=recognize&user_id=1" \
+  -H "x-api-user: 1"
+
+Expected: 200 OK - Only recognitions by user 1
+
+
+7.7) Test non-admin access to audit logs:
+---
+curl -X GET "http://127.0.0.1:8000/admin/audit-logs" \
+  -H "x-api-user: 2"
+
+Expected: 403 Forbidden - "Admin access required"
+
+
+7.8) Test invalid limit:
+---
+curl -X GET "http://127.0.0.1:8000/admin/audit-logs?limit=1001" \
+  -H "x-api-user: 1"
+
+Expected: 422 Unprocessable Entity - limit must be <= 1000
+
+
+=================================================================
+SECTION 8: AUTHENTICATION & AUTHORIZATION
+=================================================================
+
+8.1) Test missing auth header:
+---
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -d '{"receiver_id": 2, "credits": 10}'
+
+Expected: 422 Unprocessable Entity - missing x-api-user header
+
+
+8.2) Test invalid user ID in header:
+---
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 999" \
+  -d '{"receiver_id": 2, "credits": 10}'
+
+Expected: 401 Unauthorized - "Invalid user token"
+
+
+=================================================================
+SECTION 9: EDGE CASES & INTEGRATION
+=================================================================
+
+9.1) Complete flow - New user recognition and redemption:
+---
+# Create new user
+curl -X POST "http://127.0.0.1:8000/users" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Diana Prince", "email": "diana@example.com"}'
+
+# Bob sends Diana 30 credits
+curl -X POST "http://127.0.0.1:8000/recognize" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 2" \
+  -d '{"receiver_id": 4, "credits": 30, "note": "Welcome to the team!"}'
+
+# Diana redeems 20 credits
+curl -X POST "http://127.0.0.1:8000/redeem" \
+  -H "Content-Type: application/json" \
+  -H "x-api-user: 4" \
+  -d '{"credits": 20}'
+
+# Check leaderboard
+curl -X GET "http://127.0.0.1:8000/leaderboard?limit=10"
+
+# Check audit logs
+curl -X GET "http://127.0.0.1:8000/admin/audit-logs?user_id=4" \
+  -H "x-api-user: 1"
+
+
+=================================================================
+TESTING TIPS
+=================================================================
+
+1. Run tests in order for SECTIONS 1-6 to ensure proper state
+2. Use jq for pretty JSON output: curl ... | jq
+3. Check audit logs after each critical action to verify logging
+4. Reset the database between test runs for consistency:
+   rm src/boostly.db && restart server
+5. Monitor server logs for detailed error information
+6. All POST requests with body data use Content-Type: application/json
+7. Authentication via x-api-user header (user ID)
+
+=================================================================
+AUDIT LOG ACTIONS TO VERIFY
+=================================================================
+
+After running all tests, audit logs should contain:
+- create_user: User creation events
+- recognize: All recognition transactions
+- endorse: All endorsements
+- redeem: All redemptions
+- reset_month: Month reset events (admin only)
+
+Each log entry includes:
+- user_id (who performed action)
+- action (what was done)
+- entity_type & entity_id (what was affected)
+- details (full context in JSON)
+- ip_address (where from)
+- ts (when)
+
+=================================================================
