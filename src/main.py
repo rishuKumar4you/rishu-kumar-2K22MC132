@@ -1,16 +1,21 @@
 # src/main.py
-from fastapi import FastAPI, HTTPException, Depends, Header, Query, Request
+from fastapi import FastAPI, HTTPException, Depends, Query, Request
 from sqlmodel import Session, select, func
 from models import User, Recognition, Endorsement, Redemption, AuditLog
-from datetime import date
+from datetime import date, timedelta
 from db import get_session, create_db_and_tables
 from schemas import (
     CreateUserRequest, RecognizeRequest, RedeemRequest,
     UserResponse, RecognitionResponse, RedemptionResponse,
-    EndorsementResponse, LeaderboardEntry, AuditLogResponse
+    EndorsementResponse, LeaderboardEntry, AuditLogResponse,
+    LoginRequest, TokenResponse
 )
 from typing import List, Optional
 from audit import log_action, get_client_ip
+from auth import (
+    get_current_user, get_current_admin_user,
+    create_access_token, authenticate_user, hash_password
+)
 
 app = FastAPI(title="Boostly")
 
@@ -18,23 +23,20 @@ app = FastAPI(title="Boostly")
 def on_startup():
     create_db_and_tables()
 
-# Simple API-key auth for demo: header x-api-user -> user id (int)
-async def get_requesting_user(x_api_user: int = Header(...)):
-    # In demo, client sets header x-api-user: <user_id>
-    with get_session() as s:
-        user = s.get(User, x_api_user)
-        if not user:
-            raise HTTPException(401, "Invalid user token")
-        return user
-
-@app.post("/users", response_model=UserResponse)
-def create_user(req: CreateUserRequest, request: Request):
+@app.post("/register", response_model=UserResponse)
+def register_user(req: CreateUserRequest, request: Request):
+    """Register a new user with email and password."""
     with get_session() as s:
         # Check if email already exists
         existing = s.exec(select(User).where(User.email == req.email)).first()
         if existing:
             raise HTTPException(400, "Email already registered")
-        u = User(name=req.name, email=req.email)
+        
+        # Hash password
+        password_hash = hash_password(req.password)
+        
+        # Create user
+        u = User(name=req.name, email=req.email, password_hash=password_hash)
         s.add(u)
         s.commit()
         s.refresh(u)
@@ -52,8 +54,73 @@ def create_user(req: CreateUserRequest, request: Request):
         s.commit()
         return u
 
+@app.post("/login", response_model=TokenResponse)
+def login(req: LoginRequest, request: Request):
+    """
+    Authenticate user and return JWT access token.
+    
+    The JWT token includes:
+    - sub: user_id
+    - role: user role (admin or user)
+    - exp: expiration timestamp
+    """
+    with get_session() as s:
+        # Authenticate user
+        user = authenticate_user(s, req.email, req.password)
+        if not user:
+            # Audit failed login attempt
+            log_action(
+                session=s,
+                action="login_failed",
+                user_id=None,
+                entity_type="auth",
+                entity_id=None,
+                details={"email": req.email, "reason": "invalid_credentials"},
+                ip_address=get_client_ip(request)
+            )
+            s.commit()
+            raise HTTPException(
+                status_code=401,
+                detail="Incorrect email or password"
+            )
+        
+        # Determine user role
+        role = "admin" if user.id == 1 else "user"
+        
+        # Create access token with claims
+        access_token = create_access_token(
+            data={
+                "sub": str(user.id),  # subject (user_id) must be string
+                "role": role,
+                "email": user.email,
+                "name": user.name
+            },
+            expires_delta=timedelta(hours=24)
+        )
+        
+        # Audit successful login
+        log_action(
+            session=s,
+            action="login_success",
+            user_id=user.id,
+            entity_type="auth",
+            entity_id=user.id,
+            details={"email": user.email, "role": role},
+            ip_address=get_client_ip(request)
+        )
+        s.commit()
+        
+        return TokenResponse(
+            access_token=access_token,
+            token_type="bearer",
+            user_id=user.id,
+            name=user.name,
+            email=user.email,
+            role=role
+        )
+
 @app.post("/recognize", response_model=RecognitionResponse)
-def recognize(req: RecognizeRequest, request: Request, sender: User = Depends(get_requesting_user)):
+def recognize(req: RecognizeRequest, request: Request, sender: User = Depends(get_current_user)):
     if sender.id == req.receiver_id:
         raise HTTPException(400, "Cannot send credits to yourself")
     with get_session() as s:
@@ -98,7 +165,7 @@ def recognize(req: RecognizeRequest, request: Request, sender: User = Depends(ge
         return RecognitionResponse(status="ok", recognition_id=rec.id)
 
 @app.post("/recognitions/{rec_id}/endorse", response_model=EndorsementResponse)
-def endorse(rec_id: int, request: Request, endorser: User = Depends(get_requesting_user)):
+def endorse(rec_id: int, request: Request, endorser: User = Depends(get_current_user)):
     if rec_id <= 0:
         raise HTTPException(400, "Invalid recognition ID")
     with get_session() as s:
@@ -133,7 +200,7 @@ def endorse(rec_id: int, request: Request, endorser: User = Depends(get_requesti
         return EndorsementResponse(status="ok")
 
 @app.post("/redeem", response_model=RedemptionResponse)
-def redeem(req: RedeemRequest, request: Request, user: User = Depends(get_requesting_user)):
+def redeem(req: RedeemRequest, request: Request, user: User = Depends(get_current_user)):
     with get_session() as s:
         s.add(user); s.refresh(user)
         if user.redeemable_balance < req.credits:
@@ -163,10 +230,7 @@ def redeem(req: RedeemRequest, request: Request, user: User = Depends(get_reques
         return RedemptionResponse(status="ok", voucher_inr=voucher_value)
 
 @app.post("/admin/reset_month")
-def reset_month(request: Request, admin_user: User = Depends(get_requesting_user)):
-    # For demo allow only user id 1 as admin or check admin flag
-    if admin_user.id != 1:
-        raise HTTPException(403, "forbidden")
+def reset_month(request: Request, admin_user: User = Depends(get_current_admin_user)):
     today = date.today()
     with get_session() as s:
         users = s.exec(select(User)).all()
@@ -231,7 +295,7 @@ def leaderboard(limit: int = Query(default=10, gt=0, le=100)):
 
 @app.get("/admin/audit-logs", response_model=List[AuditLogResponse])
 def get_audit_logs(
-    admin_user: User = Depends(get_requesting_user),
+    admin_user: User = Depends(get_current_admin_user),
     limit: int = Query(default=100, gt=0, le=1000),
     action: Optional[str] = Query(default=None, description="Filter by action type"),
     user_id: Optional[int] = Query(default=None, description="Filter by user ID"),
@@ -246,9 +310,6 @@ def get_audit_logs(
     - user_id: Filter by user who performed the action
     - entity_type: Filter by entity type (e.g., "recognition", "redemption")
     """
-    # Check admin access
-    if admin_user.id != 1:
-        raise HTTPException(403, "Admin access required")
     
     with get_session() as s:
         # Build query with filters

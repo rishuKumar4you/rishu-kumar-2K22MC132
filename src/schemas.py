@@ -5,12 +5,31 @@ from typing import Optional
 class CreateUserRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=100, description="User's full name")
     email: EmailStr = Field(..., description="User's email address")
+    password: str = Field(..., min_length=8, max_length=100, description="User's password (min 8 chars)")
 
     @validator('name')
     def name_must_not_be_empty(cls, v):
         if not v or not v.strip():
             raise ValueError('Name cannot be empty or whitespace')
         return v.strip()
+    
+    @validator('password')
+    def password_must_be_strong(cls, v):
+        if len(v) < 8:
+            raise ValueError('Password must be at least 8 characters long')
+        return v
+
+class LoginRequest(BaseModel):
+    email: EmailStr = Field(..., description="User's email address")
+    password: str = Field(..., description="User's password")
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user_id: int
+    name: str
+    email: str
+    role: str
 
 class RecognizeRequest(BaseModel):
     receiver_id: int = Field(..., gt=0, description="ID of the user receiving recognition")

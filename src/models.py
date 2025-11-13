@@ -6,6 +6,7 @@ class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
     email: str
+    password_hash: Optional[str] = None  # hashed password for authentication
     # monthly credits to SEND (resets to 100 monthly, carry-forward up to 50)
     grant_balance: int = 100
     # sum of credits the user has sent this month (for limiting to 100)
