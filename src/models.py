@@ -1,5 +1,5 @@
-from sqlmodel import SQLModel, Field, Relationship
-from typing import Optional, List
+from sqlmodel import SQLModel, Field, Relationship, Column, JSON
+from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 
 class User(SQLModel, table=True):
@@ -35,4 +35,14 @@ class Redemption(SQLModel, table=True):
     user_id: int
     credits: int
     value_in_inr: int
+    ts: datetime = Field(default_factory=datetime.utcnow)
+
+class AuditLog(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = None  # user who performed the action (None for system actions)
+    action: str  # action name: "create_user", "recognize", "endorse", "redeem", "reset_month"
+    entity_type: Optional[str] = None  # "user", "recognition", "endorsement", "redemption"
+    entity_id: Optional[int] = None  # ID of the affected entity
+    details: Optional[Dict[str, Any]] = Field(default=None, sa_column=Column(JSON))  # additional context
+    ip_address: Optional[str] = None
     ts: datetime = Field(default_factory=datetime.utcnow)
