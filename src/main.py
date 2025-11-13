@@ -41,6 +41,9 @@ def register_user(req: CreateUserRequest, request: Request):
         s.commit()
         s.refresh(u)
         
+        # Convert to response model while still in session
+        user_response = UserResponse.model_validate(u)
+        
         # Audit log
         log_action(
             session=s,
@@ -52,7 +55,8 @@ def register_user(req: CreateUserRequest, request: Request):
             ip_address=get_client_ip(request)
         )
         s.commit()
-        return u
+        
+    return user_response
 
 @app.post("/login", response_model=TokenResponse)
 def login(req: LoginRequest, request: Request):
