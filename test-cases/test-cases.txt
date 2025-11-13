@@ -1,0 +1,28 @@
+1) Create users:
+curl -X POST "http://127.0.0.1:8000/users?name=Alice&email=alice@x"
+curl -X POST "http://127.0.0.1:8000/users?name=Bob&email=bob@x"
+
+2) Alice recognizes Bob with 20 credits:
+curl -X POST "http://127.0.0.1:8000/recognize?receiver_id=2&credits=20&note=Thanks" -H "x-api-user: 1"
+
+Expected: success, Bob.redeemable_balance increased by 20, Alice.grant_balance decreased by 20 and sent_this_month increased by 20.
+
+3) Endorse recognition 1:
+curl -X POST "http://127.0.0.1:8000/recognitions/1/endorse" -H "x-api-user: 3"
+
+Expected: success on first endorsement, 400 on second attempt by same user.
+
+4) Redeem:
+curl -X POST "http://127.0.0.1:8000/redeem?credits=10" -H "x-api-user: 2"
+
+Expected: voucher_inr = 50, Bob.redeemable_balance decreased.
+
+5) Admin reset (carry-forward):
+curl -X POST "http://127.0.0.1:8000/admin/reset_month" -H "x-api-user: 1"
+
+Expected: grant_balance reset to 100+carry (carry up to 50), sent_this_month = 0.
+
+6) Leaderboard:
+curl -X GET "http://127.0.0.1:8000/leaderboard?limit=5"
+
+Expected: JSON list of top students with total_received, recognition_count, endorsement_total.

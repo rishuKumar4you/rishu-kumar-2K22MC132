@@ -1,0 +1,10 @@
+fastapi
+uvicorn 
+sqlmodel 
+sqlalchemy 
+alembic 
+python-multipart 
+requests
+passlib[bcrypt]
+bcrypt<4
+python-jose[cryptography]
